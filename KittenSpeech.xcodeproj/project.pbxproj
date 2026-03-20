@@ -297,6 +297,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/localChat/espeak-lib/include";
 				INFOPLIST_FILE = localChat/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = KittenTTS;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -317,7 +318,7 @@
 					"-lucd",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.ian.localChat;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ian.kittenTTS;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -346,6 +347,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/localChat/espeak-lib/include";
 				INFOPLIST_FILE = localChat/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = KittenTTS;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -366,7 +368,7 @@
 					"-lucd",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.ian.localChat;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ian.kittenTTS;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
