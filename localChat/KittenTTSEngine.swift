@@ -216,7 +216,92 @@ final class KittenTTSEngine {
         return audio
     }
 
+    // MARK: Streaming Generation
+
+    /// Yields audio chunks as each text chunk finishes inference, enabling
+    /// playback to begin before the full text has been synthesised.
+    func generateStreaming(
+        text: String,
+        voice: String,
+        speed: Float = 1.0
+    ) -> AsyncThrowingStream<[Float], Error> {
+        AsyncThrowingStream { continuation in
+            Task.detached { [weak self] in
+                guard let self else { continuation.finish(); return }
+                guard let session = await self.session, await self.espeakReady else {
+                    continuation.finish(throwing: TTSError.notReady)
+                    return
+                }
+                guard let voicePositions = await self.voices[voice] else {
+                    continuation.finish(throwing: TTSError.voiceNotFound(voice))
+                    return
+                }
+
+                await MainActor.run { self.state = .generating }
+
+                let effectiveSpeed: Float
+                if let prior = await self.loadedModel?.speedPriors[voice] {
+                    effectiveSpeed = speed * prior
+                } else {
+                    effectiveSpeed = speed
+                }
+
+                let chunks = Self.chunkText(text)
+                do {
+                    for chunk in chunks {
+                        let cleaned = Self.ensurePunctuation(chunk)
+                        let phonemes = Self.phonemizePreservingPunctuation(cleaned)
+                        let normalized = Self.basicEnglishTokenize(phonemes)
+                        var tokens = Self.phonemesToTokens(normalized)
+                        tokens.insert(0, at: 0)
+                        tokens.append(10)
+                        tokens.append(0)
+
+                        let refId = min(cleaned.count, voicePositions.count - 1)
+                        let samples = try Self.runInference(
+                            session: session,
+                            tokens: tokens,
+                            style: voicePositions[refId],
+                            speed: effectiveSpeed
+                        )
+                        continuation.yield(samples)
+                    }
+                    await MainActor.run { self.state = .ready }
+                    continuation.finish()
+                } catch {
+                    await MainActor.run { self.state = .error(error.localizedDescription) }
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
     // MARK: Playback
+
+    /// Schedules a chunk for immediate playback without stopping the player.
+    /// Call this for each chunk yielded by generateStreaming() — buffers queue
+    /// back-to-back with no gap between chunks.
+    func scheduleChunk(_ samples: [Float]) throws {
+        guard !samples.isEmpty else { return }
+        let fmt = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(Self.sampleRate),
+            channels: 1,
+            interleaved: false
+        )!
+        let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count))!
+        buf.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { src in
+            buf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
+        }
+        if !audioEngine.isRunning {
+            try AVAudioSession.sharedInstance().setCategory(.playback)
+            try AVAudioSession.sharedInstance().setActive(true)
+            try audioEngine.start()
+        }
+        playerNode.scheduleBuffer(buf)
+        if !playerNode.isPlaying { playerNode.play() }
+    }
 
     func play(samples: [Float]) throws {
         guard !samples.isEmpty else { return }
