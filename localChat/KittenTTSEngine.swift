@@ -185,12 +185,6 @@ final class KittenTTSEngine {
             tokens.append(10)
             tokens.append(0)
 
-            // DEBUG
-            print("[DEBUG] chunk:     \"\(cleaned)\"")
-            print("[DEBUG] phonemes:  \"\(phonemes)\"")
-            print("[DEBUG] normalized:\"\(normalized)\"")
-            print("[DEBUG] tokens (\(tokens.count)): \(tokens)")
-
             let refId = min(cleaned.count, voicePositions.count - 1)
             prepared.append((tokens, refId))
         }

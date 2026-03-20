@@ -2,7 +2,7 @@
 
 A native iOS app that runs [KittenTTS](https://github.com/KittenML/KittenTTS) entirely on-device. No server, no API calls, no internet required. Just type text, pick a voice, and hear it spoken aloud.
 
-This is (to my knowledge) the first iOS implementation that actually sounds good. Previous attempts used MisakiSwift for phonemization, which produces different phonemes than what the model was trained on. We compiled espeak-ng from source for iOS arm64 and use it directly, so the phoneme pipeline is identical to the original Python implementation. The result is the same audio quality you get from the Python reference.
+This is (to my knowledge) the first iOS implementation that actually sounds good. Previous attempts used MisakiSwift for phonemization, which produces different phonemes than what the model was trained on. I compiled espeak-ng from source for iOS arm64 and use it directly, so the phoneme pipeline is identical to the original Python implementation. The result is the same audio quality you get from the Python reference.
 
 ## How it works
 
@@ -26,7 +26,7 @@ The pipeline matches the Python KittenTTS implementation step for step:
 
 KittenTTS was trained with espeak phonemes. MisakiSwift is a port of the Misaki G2P engine, which produces a completely different set of phonemes. When you feed Misaki phonemes into a model trained on espeak phonemes, the audio sounds garbled and robotic.
 
-We cross-compiled espeak-ng (the same C library the Python version uses) as a static library for iOS arm64. The phoneme output is identical to Python's, which means the audio quality matches too.
+I cross-compiled espeak-ng (the same C library the Python version uses) as a static library for iOS arm64. The phoneme output is identical to Python's, which means the audio quality matches too.
 
 ## Building
 
@@ -69,13 +69,13 @@ A few things that took a while to figure out and are easy to get wrong:
 
 **Token padding matters.** The token sequence must be `[0] + phoneme_tokens + [10, 0]`. Token 10 is the end-of-text marker. Without it the model doesn't know when to stop and the audio trails off into noise.
 
-**Trim the last 5000 samples.** The model output has artifacts at the tail end. The Python code does `audio[..., :-5000]` and so do we.
+**Trim the last 5000 samples.** The model output has artifacts at the tail end. The Python code does `audio[..., :-5000]` and so does this implementation.
 
 **The espeak phonememode flag is 0x02, not 0x01.** `0x01` is `espeakPHONEMES_SHOW` (ASCII mnemonic output). `0x02` is `espeakPHONEMES_IPA` (IPA Unicode output). The header comments are misleading.
 
 **Unicode scalars, not Characters.** The vocabulary must be built by iterating Unicode scalars. Swift's `Character` type merges combining characters (like U+0329) with their neighbors, which shifts every subsequent token index and corrupts the output.
 
-**espeak-ng data needs directory structure at runtime.** Xcode's synchronized groups flatten files into the bundle root, but espeak expects `lang/gmw/en-US` and `voices/!v/` subdirectories. We solve this by copying core data files from the bundle and writing the language definitions from Swift string literals into a Caches directory at launch.
+**espeak-ng data needs directory structure at runtime.** Xcode's synchronized groups flatten files into the bundle root, but espeak expects `lang/gmw/en-US` and `voices/!v/` subdirectories. I solve this by copying core data files from the bundle and writing the language definitions from Swift string literals into a Caches directory at launch.
 
 **Speed priors.** The nano model has per-voice speed multipliers (0.8 for most voices, 0.9 for Hugo) that come from the HuggingFace config. Without them the speech is too fast.
 

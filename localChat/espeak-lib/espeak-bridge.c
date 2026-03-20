@@ -31,7 +31,6 @@ int espeak_bridge_init(const char *dataPath) {
     }
 
     initialized = 1;
-    fprintf(stderr, "[espeak-bridge] initialized OK, sample rate=%d\n", result);
     return 0;
 }
 
