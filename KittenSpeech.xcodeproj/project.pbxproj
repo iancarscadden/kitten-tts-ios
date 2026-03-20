@@ -85,6 +85,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 3528B2F22F6D28EA0066E5F0 /* Build configuration list for PBXNativeTarget "KittenSpeech" */;
 			buildPhases = (
+				CC000001CC000002CC000003 /* Patch ONNX Runtime xcframeworks for Mac Catalyst */,
 				3528B2E32F6D28E80066E5F0 /* Sources */,
 				3528B2E42F6D28E80066E5F0 /* Frameworks */,
 				3528B2E52F6D28E80066E5F0 /* Resources */,
@@ -152,6 +153,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		CC000001CC000002CC000003 /* Patch ONNX Runtime xcframeworks for Mac Catalyst */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Patch ONNX Runtime xcframeworks for Mac Catalyst";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "# Only needed for Mac Catalyst builds\nif [ \"$PLATFORM_NAME\" != \"macosx\" ]; then exit 0; fi\n\nDERIVED=\"$(dirname \"$(dirname \"$BUILD_DIR\")\")\"\nARTIFACTS=\"$DERIVED/SourcePackages/artifacts/onnxruntime-swift-package-manager\"\n\n# Write Mach-O-aware retagger:\n# Walks the ar archive + Mach-O load command table to patch ONLY the\n# LC_BUILD_VERSION cmd — never touches symbol tables or code sections.\nRETAG=\"$DERIVED/retag_cat.py\"\ncat > \"$RETAG\" << 'PYEOF'\nimport struct, sys\nLC_BUILD_VERSION=0x32; MACOS=1; CATALYST=6\nAR_MAGIC=b'!<arch>\\n'; AR_FILE_MAGIC=b'`\\n'\ndef patch_macho(buf, base):\n    if base+28>len(buf): return 0\n    if struct.unpack_from('<I',buf,base)[0]!=0xFEEDFACF: return 0\n    ncmds=struct.unpack_from('<I',buf,base+16)[0]\n    off=base+32; n=0\n    for _ in range(ncmds):\n        if off+8>len(buf): break\n        cmd=struct.unpack_from('<I',buf,off)[0]\n        csz=struct.unpack_from('<I',buf,off+4)[0]\n        if csz<8: break\n        if cmd==LC_BUILD_VERSION and off+12<=len(buf):\n            if struct.unpack_from('<I',buf,off+8)[0]==MACOS:\n                struct.pack_into('<I',buf,off+8,CATALYST); n+=1\n        off+=csz\n    return n\ndef patch_archive(path):\n    raw=open(path,'rb').read(); buf=bytearray(raw); total=0\n    if raw[:8]!=AR_MAGIC:\n        total=patch_macho(buf,0)\n        if total: open(path,'wb').write(buf)\n        return total\n    off=8\n    while off+60<=len(buf):\n        nm=buf[off:off+16].decode('ascii','replace')\n        try: sz=int(buf[off+48:off+58].decode('ascii','replace').strip())\n        except: break\n        if buf[off+58:off+60]!=AR_FILE_MAGIC: break\n        co=off+60; nx=0\n        if nm.startswith('#1/'):\n            try: nx=int(nm[3:].strip())\n            except: pass\n        total+=patch_macho(buf,co+nx)\n        off=co+sz+(sz&1)\n    open(path,'wb').write(buf)\n    return total\npath=sys.argv[1]; n=patch_archive(path)\nprint(f'  patched {n} LC_BUILD_VERSION entries: {path}')\nPYEOF\n\npatch_xcf() {\n  local XCF=\"$1\" FW=\"$2\"\n  local PLIST=\"$XCF/Info.plist\"\n  local CAT_DIR=\"$XCF/ios-arm64-maccatalyst\"\n  local MACOS_FW=\"$XCF/macos-arm64_x86_64/$FW.framework\"\n  [ -f \"$PLIST\" ] || { echo \"Not found: $PLIST\"; return; }\n  if [ -L \"$CAT_DIR\" ] || [ ! -d \"$CAT_DIR\" ]; then\n    rm -rf \"$CAT_DIR\"\n    mkdir -p \"$CAT_DIR\"\n    cp -R \"$MACOS_FW\" \"$CAT_DIR/$FW.framework\"\n    BIN=\"$(find \"$MACOS_FW\" -name \"$FW\" ! -type l | head -1)\"\n    REL=\"${BIN#$MACOS_FW/}\"\n    CBIN=\"$CAT_DIR/$FW.framework/$REL\"\n    lipo -thin arm64 \"$CBIN\" -output \"$CBIN.a64\" 2>/dev/null && mv \"$CBIN.a64\" \"$CBIN\" || true\n    python3 \"$RETAG\" \"$CBIN\"\n    echo \"Created Catalyst slice: $FW\"\n  else\n    echo \"Catalyst slice exists: $FW\"\n  fi\n  /usr/libexec/PlistBuddy -c \"Print :AvailableLibraries\" \"$PLIST\" 2>/dev/null | grep -q maccatalyst && return\n  local i=0\n  while /usr/libexec/PlistBuddy -c \"Print :AvailableLibraries:$i\" \"$PLIST\" &>/dev/null; do i=$((i+1)); done\n  /usr/libexec/PlistBuddy \\\n    -c \"Add :AvailableLibraries:$i dict\" \\\n    -c \"Add :AvailableLibraries:$i:LibraryIdentifier string ios-arm64-maccatalyst\" \\\n    -c \"Add :AvailableLibraries:$i:LibraryPath string $FW.framework\" \\\n    -c \"Add :AvailableLibraries:$i:SupportedArchitectures array\" \\\n    -c \"Add :AvailableLibraries:$i:SupportedArchitectures:0 string arm64\" \\\n    -c \"Add :AvailableLibraries:$i:SupportedPlatform string ios\" \\\n    -c \"Add :AvailableLibraries:$i:SupportedPlatformVariant string maccatalyst\" \\\n    \"$PLIST\"\n  echo \"Patched Info.plist: $FW\"\n}\n\npatch_xcf \"$ARTIFACTS/onnxruntime/onnxruntime.xcframework\" onnxruntime\npatch_xcf \"$ARTIFACTS/onnxruntime_extensions/onnxruntime_extensions.xcframework\" onnxruntime_extensions\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		3528B2E32F6D28E80066E5F0 /* Sources */ = {
@@ -292,7 +314,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = J9J45TZ65N;
+				DEVELOPMENT_TEAM = PYQ4EQ49YL;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/localChat/espeak-lib/include";
@@ -309,8 +331,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/localChat/espeak-lib",
-					"$(SRCROOT)/localChat/espeak-lib",
+					"$(PROJECT_DIR)/localChat/espeak-lib/platform$(EFFECTIVE_PLATFORM_NAME)",
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
@@ -322,8 +343,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ian.kittenTTS;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = YES;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -343,7 +364,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = J9J45TZ65N;
+				DEVELOPMENT_TEAM = PYQ4EQ49YL;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/localChat/espeak-lib/include";
@@ -360,8 +381,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/localChat/espeak-lib",
-					"$(SRCROOT)/localChat/espeak-lib",
+					"$(PROJECT_DIR)/localChat/espeak-lib/platform$(EFFECTIVE_PLATFORM_NAME)",
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
@@ -373,8 +393,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ian.kittenTTS;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = YES;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;

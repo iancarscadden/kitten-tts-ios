@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 struct ContentView: View {
@@ -10,6 +11,13 @@ struct ContentView: View {
     @State private var generatedAudio: [Float]?
     @State private var statusMessage = ""
     @State private var isPlaying = false
+    @State private var isStreaming = false
+    @State private var streamChunkCount = 0
+    @State private var streamStartTime: CFAbsoluteTime = 0
+    @State private var timeToFirstChunk: Double? = nil
+    @State private var streamTask: Task<Void, Never>?
+    @State private var streamElapsed: Double = 0
+    private let elapsedTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
@@ -45,6 +53,11 @@ struct ContentView: View {
         .onAppear {
             if engine.state == .idle {
                 engine.loadModel(selectedModel)
+            }
+        }
+        .onReceive(elapsedTimer) { _ in
+            if isStreaming {
+                streamElapsed = CFAbsoluteTimeGetCurrent() - streamStartTime
             }
         }
     }
@@ -246,59 +259,96 @@ struct ContentView: View {
     // MARK: - Action Buttons
 
     private var actionButtons: some View {
-        HStack(spacing: 12) {
-            // Generate
-            Button {
-                Task { await generateSpeech() }
-            } label: {
-                HStack(spacing: 8) {
-                    if engine.state == .generating {
-                        ProgressView()
-                            .tint(Color.appBackground)
-                            .scaleEffect(0.8)
-                    } else {
-                        Image(systemName: "waveform")
-                            .font(.system(size: 14, weight: .bold))
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                // Generate (batch)
+                Button {
+                    Task { await generateSpeech() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if engine.state == .generating && !isStreaming {
+                            ProgressView()
+                                .tint(Color.appBackground)
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 14, weight: .bold))
+                        }
+                        Text(engine.state == .generating && !isStreaming ? "Generating…" : "Generate")
+                            .font(.system(size: 15, weight: .bold))
                     }
-                    Text(engine.state == .generating ? "Generating…" : "Generate")
-                        .font(.system(size: 15, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        engine.state == .ready && !isStreaming
+                            ? Color.primaryAccent
+                            : Color.darkAccent.opacity(0.6),
+                        in: RoundedRectangle(cornerRadius: 12)
+                    )
+                    .foregroundStyle(engine.state == .ready && !isStreaming ? Color.appBackground : Color.neutral)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(
-                    engine.state == .ready
-                        ? Color.primaryAccent
-                        : Color.darkAccent.opacity(0.6),
-                    in: RoundedRectangle(cornerRadius: 12)
-                )
-                .foregroundStyle(engine.state == .ready ? Color.appBackground : Color.neutral)
-            }
-            .disabled(engine.state != .ready || inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(engine.state != .ready || isStreaming || inputText.trimmingCharacters(in: .whitespaces).isEmpty)
 
-            // Play
+                // Stream (live)
+                Button {
+                    if isStreaming {
+                        streamTask?.cancel()
+                    } else {
+                        streamTask = Task { await streamSpeech() }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        if isStreaming {
+                            StreamingBarsView()
+                        } else {
+                            Image(systemName: "dot.radiowaves.right")
+                                .font(.system(size: 14, weight: .bold))
+                        }
+                        Text(isStreaming ? "Streaming…" : "Stream")
+                            .font(.system(size: 15, weight: .bold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        isStreaming
+                            ? Color.orange.opacity(0.85)
+                            : (engine.state == .ready ? Color.secondaryAccent : Color.darkAccent.opacity(0.6)),
+                        in: RoundedRectangle(cornerRadius: 12)
+                    )
+                    .foregroundStyle(engine.state == .ready || isStreaming ? .white : Color.neutral)
+                }
+                .disabled((engine.state != .ready && !isStreaming) || inputText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            // Play (batch result)
             if generatedAudio != nil {
                 Button { playAudio() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "play.fill")
                             .font(.system(size: 14, weight: .bold))
-                        Text("Play")
+                        Text("Play Generated")
                             .font(.system(size: 15, weight: .bold))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color.secondaryAccent, in: RoundedRectangle(cornerRadius: 12))
+                    .background(Color.secondaryAccent.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
                     .foregroundStyle(.white)
                 }
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(.snappy(duration: 0.3), value: generatedAudio != nil)
+        .animation(.snappy(duration: 0.2), value: isStreaming)
     }
 
     // MARK: - Status Bar
 
     private var statusBar: some View {
-        Group {
+        VStack(spacing: 6) {
+            if isStreaming {
+                streamingStatusView
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
             if !statusMessage.isEmpty {
                 Text(statusMessage)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -307,6 +357,37 @@ struct ContentView: View {
             }
         }
         .animation(.smooth(duration: 0.2), value: statusMessage)
+        .animation(.smooth(duration: 0.2), value: isStreaming)
+    }
+
+    private var streamingStatusView: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "dot.radiowaves.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.orange)
+
+            if let ttfc = timeToFirstChunk {
+                Text("first audio \(String(format: "%.2f", ttfc))s")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.neutral)
+                Text("·")
+                    .foregroundStyle(Color.darkAccent)
+            }
+
+            Text("\(streamChunkCount) chunk\(streamChunkCount == 1 ? "" : "s")")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.orange)
+
+            Spacer()
+
+            Text(String(format: "%.1fs", streamElapsed))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.neutral)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.orange.opacity(0.3), lineWidth: 1))
     }
 
     // MARK: - Actions (logic unchanged)
@@ -342,6 +423,75 @@ struct ContentView: View {
         } catch {
             statusMessage = "Playback error: \(error.localizedDescription)"
         }
+    }
+
+    private func streamSpeech() async {
+        isStreaming = true
+        streamChunkCount = 0
+        streamElapsed = 0
+        timeToFirstChunk = nil
+        statusMessage = ""
+        streamStartTime = CFAbsoluteTimeGetCurrent()
+
+        let stream = engine.generateStreaming(
+            text: inputText,
+            voice: selectedVoice,
+            speed: speed
+        )
+
+        do {
+            for try await chunk in stream {
+                if Task.isCancelled { break }
+                if streamChunkCount == 0 {
+                    timeToFirstChunk = CFAbsoluteTimeGetCurrent() - streamStartTime
+                }
+                streamChunkCount += 1
+                try engine.scheduleChunk(chunk)
+            }
+            let totalElapsed = CFAbsoluteTimeGetCurrent() - streamStartTime
+            if !Task.isCancelled {
+                statusMessage = String(
+                    format: "streamed %d chunks in %.2fs",
+                    streamChunkCount, totalElapsed
+                )
+            }
+        } catch is CancellationError {
+            statusMessage = "stream cancelled"
+        } catch {
+            statusMessage = "Stream error: \(error.localizedDescription)"
+        }
+
+        isStreaming = false
+    }
+}
+
+// MARK: - Streaming Bars Animation
+
+private struct StreamingBarsView: View {
+    @State private var animating = false
+
+    private let barCount = 3
+    private let barWidth: CGFloat = 2.5
+    private let barMaxHeight: CGFloat = 11
+    private let barMinHeight: CGFloat = 3
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 2) {
+            ForEach(0..<barCount, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color.white)
+                    .frame(width: barWidth, height: animating ? barMaxHeight : barMinHeight)
+                    .animation(
+                        .easeInOut(duration: 0.4)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.13),
+                        value: animating
+                    )
+            }
+        }
+        .frame(height: barMaxHeight)
+        .onAppear { animating = true }
+        .onDisappear { animating = false }
     }
 }
 
