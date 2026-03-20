@@ -1,6 +1,6 @@
 # Kitten TTS for iOS
 
-A native iOS app that runs [KittenTTS](https://github.com/KittenML/KittenTTS) entirely on-device. No server, no API calls, no internet required. Just type text, pick a voice, and hear it spoken aloud.
+A native iOS app that runs [KittenTTS](https://github.com/KittenML/KittenTTS) entirely on-device.
 
 This is (to my knowledge) the first iOS implementation that actually sounds good. Previous attempts used MisakiSwift for phonemization, which produces different phonemes than what the model was trained on. I compiled espeak-ng from source for iOS arm64 and use it directly, so the phoneme pipeline is identical to the original Python implementation. The result is the same audio quality you get from the Python reference.
 
